@@ -479,7 +479,7 @@
         </div>
         <button id="btnRestart" type="button">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5v6h6M20 19v-6h-6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 11a8 8 0 0 1 13.6-4.6L20 8M4 16l.9 1.6A8 8 0 0 0 18.5 13" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          最初から
+          <span id="restartLabel">最初から</span>
         </button>
         <button id="btnSound" type="button" aria-pressed="true">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10v4h3l5 4V6l-5 4H4z" fill="currentColor"/><path d="M15.5 9.5a4 4 0 0 1 0 5M18 7a7.5 7.5 0 0 1 0 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -757,12 +757,31 @@
         stats.mimicWin = false;
         var achUnlocked = {};
         var toastTimer = null;
+        var toastQueue = [];
+        var toastShowing = false;
         function showToast(text) {
+          // Queue toasts so simultaneous achievements each get shown
+          // instead of only the last one overwriting the others.
+          toastQueue.push(text);
+          if (!toastShowing) nextToast();
+        }
+        function nextToast() {
           var t = document.getElementById("toast");
+          var text = toastQueue.shift();
+          if (text === undefined) {
+            toastShowing = false;
+            t.classList.remove("show");
+            return;
+          }
+          toastShowing = true;
           t.textContent = text;
           t.classList.add("show");
           if (toastTimer) clearTimeout(toastTimer);
-          toastTimer = setTimeout(function () { t.classList.remove("show"); }, 3200);
+          toastTimer = setTimeout(function () {
+            t.classList.remove("show");
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(nextToast, 250);
+          }, 3200);
         }
         function checkAchievements() {
           refreshBests();
@@ -977,6 +996,31 @@
         var boardEl = document.getElementById("board");
         var msgEl = document.getElementById("message");
 
+        // Screen-reader label for a tile: position plus what is known
+        // about it (undug / flagged / dug item / nearby-trap count).
+        function cellLabel(cell, i) {
+          var row = Math.floor(i / state.size) + 1;
+          var col = (i % state.size) + 1;
+          var pos = row + "行" + col + "列目";
+          if (!cell.dug) {
+            if (cell.flagged) return pos + "、旗あり、未掘";
+            if (cell.radar) return pos + "、レーダーが反応、未掘";
+            return pos + "、未掘";
+          }
+          var name = "";
+          if (cell.type === "trap") name = "バクダン";
+          else if (cell.type === "rare") name = "レア宝「" + rareById(cell.rareId).name + "」";
+          else if (cell.type === "mimic") name = cell.mimicGood ? "宝箱（ミミック当たり）" : "ミミック";
+          else if (cell.type === "spring") name = "泉（ライフ回復）";
+          else if (cell.type === "collapse") name = "落盤";
+          else if (NAMES[cell.type]) name = NAMES[cell.type];
+          else name = "空きマス";
+          var label = pos + "、掘り済み、" + name;
+          if (cell.adjTrap > 0) label += "、周囲のワナ " + cell.adjTrap + "個";
+          if (cell.adjTreasure) label += "、近くにお宝あり";
+          return label;
+        }
+
         function renderBoard() {
           boardEl.style.gridTemplateColumns = "repeat(" + state.size + ", 1fr)";
           boardEl.innerHTML = "";
@@ -986,7 +1030,7 @@
             b.className = "cell";
             b.dataset.idx = i;
             b.setAttribute("role", "gridcell");
-            b.setAttribute("aria-label", "マス " + (i + 1));
+            b.setAttribute("aria-label", cellLabel(cell, i));
             boardEl.appendChild(b);
             paintCell(b, cell);
           });
@@ -996,6 +1040,7 @@
           b.innerHTML = "";
           b.classList.toggle("dug", cell.dug);
           b.classList.remove("has-num");
+          b.setAttribute("aria-label", cellLabel(cell, parseInt(b.dataset.idx, 10) || 0));
           if (!cell.dug) {
             if (cell.flagged) b.innerHTML = ICONS.flag;
             else if (cell.radar) b.innerHTML = '<span class="ping" title="レーダーがお宝に反応している"></span>';
@@ -1340,7 +1385,30 @@
         modeDig.addEventListener("click", function () { setMode("dig"); });
         modeFlag.addEventListener("click", function () { setMode("flag"); });
 
-        document.getElementById("btnRestart").addEventListener("click", function () { newRun(); });
+        // "最初から" needs a second tap while a run is in progress, so a
+        // mis-tap cannot wipe the current score / floor. A fresh run
+        // restarts immediately with no confirm step.
+        var restartArmed = false;
+        var restartArmTimer = null;
+        document.getElementById("btnRestart").addEventListener("click", function () {
+          var label = document.getElementById("restartLabel");
+          var inProgress = state && (state.score > 0 || state.depth > 1 ||
+            state.cells.some(function (c) { return c.dug; }));
+          if (inProgress && !restartArmed) {
+            restartArmed = true;
+            label.textContent = "もう一度タップで最初から";
+            if (restartArmTimer) clearTimeout(restartArmTimer);
+            restartArmTimer = setTimeout(function () {
+              restartArmed = false;
+              label.textContent = "最初から";
+            }, 3000);
+            return;
+          }
+          if (restartArmTimer) clearTimeout(restartArmTimer);
+          restartArmed = false;
+          label.textContent = "最初から";
+          newRun();
+        });
 
         var btnSound = document.getElementById("btnSound");
         btnSound.addEventListener("click", function () {
